@@ -1,4 +1,4 @@
-# SBI Forex Rates — Scraper (Repo A)
+# SBI Forex Rates — Scraper
 
 A service that fetches the SBI forex rates PDF four times a day, parses it with `pdfplumber`, and commits the updated `sbi_rates.db` SQLite database back to this repository.
 
