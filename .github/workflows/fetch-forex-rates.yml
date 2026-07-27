@@ -1,46 +1,61 @@
-name: Fetch and Process SBI Forex Rates
+name: Fetch SBI Forex Rates
 
 on:
   schedule:
     - cron: "30 0,6,12,18 * * *"
-  workflow_dispatch: # Allow manual triggering
+  workflow_dispatch:
+
+concurrency:
+  group: fetch-sbi-forex-rates
+  cancel-in-progress: false
 
 jobs:
-  fetch-and-process:
+  fetch:
     runs-on: ubuntu-latest
-
-    container:
-      image: python:3.13-slim
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Install system dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            gcc \
-            g++ \
-            wget \
-            curl \
-            ca-certificates \
-            && rm -rf /var/lib/apt/lists/*
+      - uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
+        with:
+          enable-cache: true
 
-      - name: Set up Python environment
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r cron/requirements.txt
+      - name: Install dependencies
+        run: uv sync --frozen
 
-      - name: Fetch and process SBI forex rates
+      - name: Run tests
+        run: uv run python -m unittest discover -s tests
+
+      - name: Snapshot database statistics
+        run: cp sbi_rates.db "$RUNNER_TEMP/sbi_rates-before.db"
+
+      - name: Fetch and process forex rates
+        id: fetch
+        run: uv run python scraper.py
+
+      - name: Publish database summary
+        if: always()
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FETCH_OUTCOME: ${{ steps.fetch.outcome }}
         run: |
-          cd cron
-          python fetch_and_fill_from_url.py
+          uv run python scripts/db_summary.py \
+            --before "$RUNNER_TEMP/sbi_rates-before.db" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Notify on failure
-        if: failure()
+      - name: Commit updated database
         run: |
-          echo "SBI Forex rates processing failed at $(date)"
-          # You can add notification logic here (e.g., send email, Slack message, etc.)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sbi_rates.db
+          if git diff --cached --quiet; then
+            echo "### Publish result" >> "$GITHUB_STEP_SUMMARY"
+            echo "No database changes to commit." >> "$GITHUB_STEP_SUMMARY"
+          else
+            git commit -m "chore: update forex rates $(date -u +%Y-%m-%d)"
+            git push
+            sha=$(git rev-parse --short HEAD)
+            echo "### Publish result" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ Pushed database update in commit \`$sha\`." >> "$GITHUB_STEP_SUMMARY"
+          fi

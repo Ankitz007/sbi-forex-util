@@ -1,150 +1,62 @@
-# SBI Forex Rates API
+# SBI Forex Rates — Scraper (Repo A)
 
-A Python API to fetch foreign exchange rates from the State Bank of India (SBI).
+A service that fetches the SBI forex rates PDF four times a day, parses it with `pdfplumber`, and commits the updated `sbi_rates.db` SQLite database back to this repository.
 
-## 🚀 Live API
+Another repo reads `sbi_rates.db` directly over HTTP using [sql.js-httpvfs](https://github.com/phiresky/sql.js-httpvfs) — no server required.
 
-The API is deployed and available at: <https://sbi-forex-rates-api.vercel.app/>
+## How it works
 
-## 📋 API Endpoints
+1. GitHub Action runs on `cron: "30 0,6,12,18 * * *"` (4× daily, UTC)
+2. `scraper.py` downloads the PDF from SBI's servers (primary + fallback URL)
+3. Parses the date and rate table using `pdfplumber`
+4. Upserts records into `sbi_rates.db` via stdlib `sqlite3`
+5. Action commits and pushes the updated database file
 
-### 1. Get Forex Rates for a Date
+## Local development
 
-- Endpoint: `GET /`
-- Description: Fetch all forex rates for a specific date.
-- Query parameters:
-  - `date` (required) — Date in DD-MM-YYYY format
-
-Example:
-
-```bash
-curl "https://sbi-forex-rates-api.vercel.app/?date=25-04-2025"
-```
-
-### 2. Check Date Availability (range)
-
-- Endpoint: `GET /check-dates`
-- Description: Return which dates within an inclusive date range have data in the DB.
-- Query parameters:
-  - `from` (required) — start date in DD-MM-YYYY format
-  - `to` (required) — end date in DD-MM-YYYY format
-
-Example (check 1–5 Jan 2025):
+Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-curl "https://sbi-forex-rates-api.vercel.app/check-dates?from=01-01-2025&to=05-01-2025"
+# install dependencies
+uv sync
+
+# test against a local PDF
+uv run python scraper.py test-1.pdf
+
+# fetch live from SBI and update the db
+uv run python scraper.py
 ```
 
-Notes:
+### Backfilling historical data
 
-- The API returns dates in DD-MM-YYYY format.
-- The service enforces a safety cap on the range (2 years by default). Ask if you want this changed.
-
-## 📊 Response Format
-
-All endpoints return a standardized JSON envelope:
-
-```json
-{
-  "success": true,
-  "data": [...],
-  "message": "Optional descriptive message"
-}
-```
-
-### Sample Forex Rates Response
-
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": 1,
-      "currency": "United States Dollar",
-      "ticker": "USD",
-      "tt_buy": 82.5,
-      "tt_sell": 83.0,
-      "bill_buy": 82.25,
-      "bill_sell": 83.25,
-      "ftc_buy": 82.0,
-      "ftc_sell": 83.5,
-      "cn_buy": 81.75,
-      "cn_sell": 83.75,
-      "date": "25-04-2025",
-      "category": "below_10"
-    }
-  ]
-}
-```
-
-### Sample Date Availability Response
-
-```json
-{
-  "success": true,
-  "data": ["01-01-2025", "03-01-2025"],
-  "message": "Found data for 2 out of 5 dates"
-}
-```
-
-## ⏰ Cron jobs
-
-This repository includes small command-line scripts under the `cron/` folder that are useful for scheduled processing of SBI forex PDFs and bulk ingestion of already-downloaded PDFs.
-
-What is included
-
-- `cron/fetch_and_fill_from_url.py` — Downloads the latest SBI forex rates PDF (tries a primary and fallback URL), saves a temporary file, and processes it into the database.
-- `cron/ingest_all.py` — Walks the `pdf_files/` directory and processes all PDF files in parallel (configurable worker count).
-- `cron/check_db_sync.py` — Checks if all two databases (primary, backup) are synchronized by comparing record counts, date ranges, and sample data integrity.
-- `cron/requirements.txt` — Extra Python dependencies used by the cron scripts (PDF parsing, DB drivers, requests).
-
-Key configuration
-
-- The cron scripts load environment variables via `python-dotenv`. You can configure database URLs and other settings using a `.env` file or environment variables:
-  - `DATABASE_URL` (primary DB connection)
-  - `BACKUP_DATABASE_URL` (optional)
-  - Other runtime config values are defined in `cron/config/settings.py` (for example, `pdf_files_dir` and `num_workers`).
-
-Manual run (one-shot)
-
-From the project root (recommended to keep imports working):
+The `data/pdf_files/` archive (gitignored) holds historical PDFs. To bulk-load
+them into the database:
 
 ```bash
-# ensure your virtualenv or python env is active and dependencies are installed
-pip install -r cron/requirements.txt
-
-# fetch latest PDF and process
-PYTHONPATH=. python cron/fetch_and_fill_from_url.py
-
-# process all PDFs under the pdf_files directory
-PYTHONPATH=. python cron/ingest_all.py
-
-# check database synchronization status
-PYTHONPATH=. python cron/check_db_sync.py
+uv run python scripts/backfill.py 2024        # one year
+uv run python scripts/backfill.py 2024 2025   # several years
 ```
 
-Notes & troubleshooting
+This is a one-off helper — the scraper itself only ever handles the latest PDF.
+Both the `BELOW_10` and `BETWEEN_10_20` transaction-range categories are stored.
 
-- The cron scripts expect the repository root on `PYTHONPATH` so internal imports resolve the same way they do when running the API. That's why the examples use `PYTHONPATH=.` and `cd` into the repo first.
-- If you use a virtual environment, activate it in the crontab command or point to its `python` binary explicitly.
-- If PDF downloads fail, check logs from `cron_fetch.log` and ensure the URLs in `cron/config/settings.py` are reachable.
-- Adjust `pdf_files/` directory location or `processing_config.pdf_files_dir` in `cron/config/settings.py` if you store PDFs elsewhere.
+## Database schema
 
-## 🛠️ Local development
-
-Use the repository root on PYTHONPATH so imports resolve the same way as Vercel (PYTHONPATH="."). Run locally with:
-
-```bash
-PYTHONPATH=. python -m api.main
+```sql
+CREATE TABLE forex_rates (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    currency  TEXT NOT NULL,
+    ticker    TEXT NOT NULL,
+    tt_buy    REAL,
+    tt_sell   REAL,
+    bill_buy  REAL,
+    bill_sell REAL,
+    ftc_buy   REAL,
+    ftc_sell  REAL,
+    cn_buy    REAL,
+    cn_sell   REAL,
+    date      TEXT NOT NULL,       -- ISO 8601: YYYY-MM-DD
+    category  TEXT NOT NULL,       -- BELOW_10 | BETWEEN_10_20
+    UNIQUE(ticker, date, category)
+);
 ```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Local URLs:
-
-- API root: <http://localhost:8080/>
-- OpenAPI docs: <http://localhost:8080/docs>

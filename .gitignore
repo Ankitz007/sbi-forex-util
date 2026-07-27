@@ -1,4 +1,4 @@
-# Environment variables
+# Environment
 .env
 .env.local
 .env.*.local
@@ -7,12 +7,11 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environments
-venv/
+.venv/
 
 # IDE
 .vscode/
+.claude/
 
 # OS
 .DS_Store
@@ -21,13 +20,13 @@ venv/
 .Spotlight-V100
 .Trashes
 
-# Database stuff
-*.db
-*.sqlite
+# Logs
 *.log
-*.sql
 
-# Others
-misc/
+# Historical PDF archive used only for one-off backfills (data/backfill.py).
+# It's ~143M and not part of Repo A's deliverable, so keep it out of git.
+# data/README.md is still tracked.
 pdf_files/
-*.pdf
+data/pdf_files/
+
+# sbi_rates.db is intentionally committed — do NOT add *.db or *.sqlite here
